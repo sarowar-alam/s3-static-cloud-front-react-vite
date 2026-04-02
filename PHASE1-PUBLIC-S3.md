@@ -210,3 +210,12 @@ http://batch11-ostaddevops-site.s3-website.ap-south-1.amazonaws.com
 
 When you're ready to add HTTPS and a custom domain (`batch11.ostaddevops.click`),
 follow **PHASE2-PRIVATE-CLOUDFRONT.md** — either starting fresh or migrating from this setup.
+
+---
+
+## 🧑‍💻 Author
+
+*Md. Sarowar Alam*  
+Lead DevOps Engineer, Hogarth Worldwide  
+📧 Email: sarowar@hotmail.com  
+🔗 LinkedIn: https://www.linkedin.com/in/sarowar/

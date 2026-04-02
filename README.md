@@ -526,3 +526,12 @@ This project is scoped to Module 1 of the course — demonstrating manual and se
 | AWS CLI profile | `sarowar-ostad` |
 | Course platform | https://ostad.app/ |
 | Instructor | MD Sarowar Alam — Lead DevOps Engineer, WPPProduction |
+
+---
+
+## 🧑‍💻 Author
+
+*Md. Sarowar Alam*  
+Lead DevOps Engineer, Hogarth Worldwide  
+📧 Email: sarowar@hotmail.com  
+🔗 LinkedIn: https://www.linkedin.com/in/sarowar/

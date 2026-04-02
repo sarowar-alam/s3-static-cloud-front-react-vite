@@ -534,3 +534,12 @@ The script is at the project root: [`deploy.ps1`](deploy.ps1)
 | OAC signing = SigV4 | Required for S3 buckets outside `us-east-1` |
 | CloudFront hosted zone for alias = `Z2FDTNDATAQYW2` | Fixed AWS value for all CloudFront distributions globally |
 | Bucket name ≠ domain name | Avoids bucket enumeration attacks |
+
+---
+
+## 🧑‍💻 Author
+
+*Md. Sarowar Alam*  
+Lead DevOps Engineer, Hogarth Worldwide  
+📧 Email: sarowar@hotmail.com  
+🔗 LinkedIn: https://www.linkedin.com/in/sarowar/
