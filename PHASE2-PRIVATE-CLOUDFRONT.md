@@ -1,53 +1,49 @@
-# Phase 2 — Static Site with Private S3 Bucket + CloudFront
+# Phase 2 — Private S3 + CloudFront + HTTPS + Custom Domain
 
 Deploy the React + Vite site with:
 - **Private S3 bucket** — no public access, CloudFront is the only entry point
-- **CloudFront OAC** (Origin Access Control) — replaces the deprecated OAI
+- **CloudFront OAC** (Origin Access Control, SigV4) — replaces the deprecated OAI
 - **HTTPS enforced** with TLS 1.2 minimum
-- **Custom domain** `batch11.ostaddevops.click` via Route 53
+- **Custom domain** `master.ostaddevops.click` via Route 53
 - **Security headers** via AWS managed `SecurityHeadersPolicy`
-- **SPA routing** handled via CloudFront custom error responses
+- **SPA routing** — CloudFront custom error responses map 403 + 404 → `/index.html` HTTP 200
+
+> **Fully independent of Phase 1.**  
+> Uses a separate bucket (`master-ostaddevops-site-private`).  
+> Phase 1 bucket (`master-ostaddevops-site`) is never touched.
 
 ---
 
-## Variables
+## Fixed Values
 
 | Name | Value |
 |---|---|
-| Bucket | `batch11-ostaddevops-site` |
+| Bucket | `master-ostaddevops-site-private` |
 | Region (S3) | `ap-south-1` |
-| Region (ACM cert) | `us-east-1` ⚠️ required for CloudFront |
+| Region (ACM / CloudFront) | `us-east-1` ⚠️ hard AWS requirement |
 | AWS Profile | `sarowar-ostad` |
-| Domain | `batch11.ostaddevops.click` |
-| Hosted Zone | `ostaddevops.click` |
-| CloudFront config | `infra/cloudfront-distribution.json` |
-| Phase 2 policy | `infra/bucket-policy-phase2.json` |
-| Deploy script | `deploy.ps1` |
-
----
-
-## Choose Your Path
-
-| | When to use |
-|---|---|
-| **Option 1 — Fresh Setup** | Starting from scratch, no Phase 1 bucket exists |
-| **Option 2 — Migrate from Phase 1** | Phase 1 is already live, upgrading to private + HTTPS |
+| Account ID | `388779989543` |
+| Domain | `master.ostaddevops.click` |
+| Hosted Zone | `ostaddevops.click` / `Z1019653XLWIJ02C53P5` |
+| ACM Certificate ARN | `arn:aws:acm:us-east-1:388779989543:certificate/392fe338-b0b8-4aeb-ac2c-c930b219bb13` |
+| OAC Name | `master-oac` |
+| CloudFront config template | `infra/cloudfront-distribution.json` |
+| Bucket policy template | `infra/bucket-policy-phase2.json` |
+| State file | `.phase2-state.json` (auto-created, gitignored) |
 
 ---
 
 ---
 
-# Option 1 — Fresh Setup (No Prior Phase 1)
+## Option A — AWS Console (GUI)
 
 ---
-
-## Option 1A — AWS Console (GUI)
 
 ### Step 1 — Create Private S3 Bucket
 
 1. Open [S3 Console](https://s3.console.aws.amazon.com/) → **Create bucket**
-2. **Bucket name:** `batch11-ostaddevops-site`
-3. **AWS Region:** `ap-south-1`
+2. **Bucket name:** `master-ostaddevops-site-private`
+3. **AWS Region:** `ap-south-1` (Asia Pacific — Mumbai)
 4. **Block Public Access:** leave all 4 checkboxes **ON** (default) ✅
 5. **Bucket Versioning:** Enable
 6. **Default encryption:** Enable — type **SSE-S3 (AES-256)**
@@ -56,28 +52,23 @@ Deploy the React + Vite site with:
 
 ---
 
-### Step 2 — Request ACM Certificate
+### Step 2 — ACM Certificate (Already Issued)
 
-> ⚠️ **Must be done in region `us-east-1`** — this is a hard AWS requirement for CloudFront.
+The TLS certificate for `master.ostaddevops.click` is already imported in ACM (`us-east-1`):
 
-1. Switch the AWS Console region to **US East (N. Virginia) — us-east-1**
-2. Open [ACM Console](https://console.aws.amazon.com/acm/) → **Request certificate**
-3. Type: **Request a public certificate** → Next
-4. **Fully qualified domain name:** `batch11.ostaddevops.click`
-5. **Validation method:** DNS validation
-6. Click **Request**
-7. Open the pending certificate → click **Create records in Route 53**
-   (this auto-adds the CNAME validation record to your hosted zone)
-8. Wait **1–3 minutes** → Status changes to **Issued** ✅
-9. 📋 Copy the **Certificate ARN** — needed for Step 4
+```
+arn:aws:acm:us-east-1:388779989543:certificate/392fe338-b0b8-4aeb-ac2c-c930b219bb13
+```
+
+No action needed — proceed to Step 3.
 
 ---
 
 ### Step 3 — Create CloudFront Origin Access Control (OAC)
 
 1. Open [CloudFront Console](https://console.aws.amazon.com/cloudfront/)
-2. In the left sidebar → **Security** → **Origin access** → **Create control setting**
-3. **Name:** `batch11-oac`
+2. Left sidebar → **Security** → **Origin access** → **Create control setting**
+3. **Name:** `master-oac`
 4. **Origin type:** S3
 5. **Signing behavior:** Sign requests (recommended)
 6. **Signing protocol:** SigV4
@@ -89,48 +80,39 @@ Deploy the React + Vite site with:
 ### Step 4 — Create CloudFront Distribution
 
 1. CloudFront → **Create distribution**
-2. **Origin domain:** select `batch11-ostaddevops-site.s3.ap-south-1.amazonaws.com` from dropdown
-   > ⚠️ Pick the **S3 REST endpoint** — NOT the `.s3-website.` URL
-3. **Origin access:** select **Origin access control settings (recommended)**
-   - Pick `batch11-oac` you just created
-   - A banner appears saying the bucket policy needs updating — click **Copy policy** and save it, you'll use it in Step 6
+2. **Origin domain:** `master-ostaddevops-site-private.s3.ap-south-1.amazonaws.com`
+   > ⚠️ Pick the **S3 REST endpoint** — NOT a `.s3-website.` URL
+3. **Origin access:** select **Origin access control settings (recommended)** → pick `master-oac`
+   - A banner appears → click **Copy policy** and save it for Step 6
 4. **Viewer protocol policy:** Redirect HTTP to HTTPS
 5. **Allowed HTTP methods:** GET, HEAD
 6. **Cache policy:** CachingOptimized
-7. **Response headers policy:** select **SecurityHeadersPolicy** (AWS managed)
-   - This adds HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy automatically
+7. **Response headers policy:** SecurityHeadersPolicy (AWS managed)
 8. **Default root object:** `index.html`
-9. **Alternate domain names (CNAMEs):** `batch11.ostaddevops.click`
+9. **Alternate domain names (CNAMEs):** `master.ostaddevops.click`
 10. **Custom SSL certificate:** select the cert from Step 2
 11. **Security policy:** `TLSv1.2_2021`
-12. **Price class:** All edge locations (or your preference)
-13. Click **Create distribution**
-14. ⏳ Wait ~5 minutes → Status: **Deployed**
-15. 📋 Copy the **Distribution ID** and **Distribution domain name** (e.g. `d1abc.cloudfront.net`)
+12. Click **Create distribution**
+13. 📋 Copy the **Distribution ID** and **Distribution domain name** (e.g. `d1abc.cloudfront.net`)
+14. ⏳ Wait ~5-15 minutes → Status: **Deployed**
 
 ---
 
 ### Step 5 — Add Custom Error Responses (SPA Routing)
 
-> Private S3 buckets return **403** (not 404) for missing keys. Both must be mapped to `index.html`.
+> Private S3 returns **403** (not 404) for missing keys — both must be mapped.
 
 1. Open the distribution → **Error pages** tab → **Create custom error response**
-2. First rule:
-   - HTTP error code: **403**
-   - Customize error response: **Yes**
-   - Response page path: `/index.html`
-   - HTTP response code: **200**
-3. Click **Create custom error response**
-4. Repeat for:
-   - HTTP error code: **404** → `/index.html` → **200**
+2. Rule 1: HTTP error code **403** → Response page path `/index.html` → HTTP response code **200**
+3. Rule 2: HTTP error code **404** → Response page path `/index.html` → HTTP response code **200**
 
 ---
 
-### Step 6 — Update S3 Bucket Policy (OAC access only)
+### Step 6 — Update S3 Bucket Policy (OAC-only access)
 
-1. Open S3 → `batch11-ostaddevops-site` → **Permissions** → **Bucket policy** → **Edit**
-2. Open `infra/bucket-policy-phase2.json` and replace:
-   - `ACCOUNT_ID` → your 12-digit AWS account ID (visible in the top-right corner of console)
+1. Open S3 → `master-ostaddevops-site-private` → **Permissions** → **Bucket policy** → **Edit**
+2. Open [`infra/bucket-policy-phase2.json`](infra/bucket-policy-phase2.json) and replace:
+   - `ACCOUNT_ID` → `388779989543`
    - `DISTRIBUTION_ID` → the CloudFront distribution ID from Step 4
 3. Paste the updated JSON → **Save changes**
 
@@ -141,14 +123,12 @@ Deploy the React + Vite site with:
     {
       "Sid": "AllowCloudFrontOACOnly",
       "Effect": "Allow",
-      "Principal": {
-        "Service": "cloudfront.amazonaws.com"
-      },
+      "Principal": { "Service": "cloudfront.amazonaws.com" },
       "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::batch11-ostaddevops-site/*",
+      "Resource": "arn:aws:s3:::master-ostaddevops-site-private/*",
       "Condition": {
         "StringEquals": {
-          "AWS:SourceArn": "arn:aws:cloudfront::YOUR_ACCOUNT_ID:distribution/YOUR_DISTRIBUTION_ID"
+          "AWS:SourceArn": "arn:aws:cloudfront::388779989543:distribution/YOUR_DISTRIBUTION_ID"
         }
       }
     }
@@ -160,340 +140,79 @@ Deploy the React + Vite site with:
 
 ### Step 7 — Route 53 DNS Record
 
-1. Open [Route 53 Console](https://console.aws.amazon.com/route53/) → **Hosted zones**
-2. Click `ostaddevops.click`
-3. Click **Create record**
-4. **Record name:** `batch11`
-5. **Record type:** A
-6. Toggle **Alias** → ON
-7. **Route traffic to:** Alias to CloudFront distribution
-8. Select the distribution from the dropdown
-9. Click **Create records**
-10. ⏳ DNS propagation: 1–5 minutes
+1. Open [Route 53](https://console.aws.amazon.com/route53/) → **Hosted zones** → `ostaddevops.click`
+2. Click **Create record**
+3. **Record name:** `master`
+4. **Record type:** A
+5. Toggle **Alias** → ON
+6. **Route traffic to:** Alias to CloudFront distribution → select the distribution
+7. Click **Create records**
+8. ⏳ DNS propagation: 1–5 minutes
 
 ---
 
 ### Step 8 — Build & Deploy
 
 ```powershell
-.\deploy.ps1 -DistributionId "REPLACE_WITH_YOUR_DISTRIBUTION_ID"
+cd master-site
+npm install       # first time only
+npm run build
+cd ..
+aws s3 sync master-site/dist/ s3://master-ostaddevops-site-private --delete --profile sarowar-ostad
+aws cloudfront create-invalidation --distribution-id YOUR_DIST_ID --paths "/*" --profile sarowar-ostad
 ```
 
-This script:
-1. Runs `npm run build` inside `batch11-site/`
-2. Syncs `dist/` to `s3://batch11-ostaddevops-site` with `--delete`
-3. Runs `aws cloudfront create-invalidation --paths "/*"` to flush the CDN cache
-
 ---
 
 ---
 
-## Option 1B — AWS CLI
+## Option B — PowerShell Script (`setup-phase2.ps1`)
 
-Run all commands from the **project root** (`Class-02/`).
+Run from the **project root**.
 
-### Step 1 — Create Private S3 Bucket
+### Setup / Re-deploy
 
 ```powershell
-# Create bucket
-aws s3api create-bucket `
-  --bucket batch11-ostaddevops-site `
-  --region ap-south-1 `
-  --create-bucket-configuration LocationConstraint=ap-south-1 `
-  --profile sarowar-ostad
-
-# Enable versioning
-aws s3api put-bucket-versioning `
-  --bucket batch11-ostaddevops-site `
-  --versioning-configuration Status=Enabled `
-  --profile sarowar-ostad
-
-# Enable SSE-S3 encryption
-aws s3api put-bucket-encryption `
-  --bucket batch11-ostaddevops-site `
-  --server-side-encryption-configuration '{
-    "Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]
-  }' `
-  --profile sarowar-ostad
-
-# Confirm Block Public Access is ON
-aws s3api put-public-access-block `
-  --bucket batch11-ostaddevops-site `
-  --public-access-block-configuration `
-    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true `
-  --profile sarowar-ostad
+.\setup-phase2.ps1
 ```
+
+**First run** — detects no state file, provisions all infrastructure then deploys:
+
+| Step | Action |
+|---|---|
+| 1/7 | Creates `master-ostaddevops-site-private` (skips if exists) — saves state |
+| 1/7 | Hardens bucket: Block Public Access ON, versioning, SSE-S3 encryption |
+| 2/7 | Creates CloudFront OAC (`master-oac`, SigV4) |
+| 3/7 | Creates CloudFront distribution — patches OAC ID + CallerReference in-memory (template never modified on disk) |
+| 4/7 | Applies OAC-only bucket policy — resolves `ACCOUNT_ID` + `DISTRIBUTION_ID` at runtime |
+| 5/7 | Creates Route 53 A alias `master.ostaddevops.click` → CloudFront (UPSERT) |
+| 6/7 | Waits for CloudFront to deploy (~5-15 min) |
+| 7/7 | `npm install` (if needed) → `npm run build` → `aws s3 sync` → CloudFront invalidation |
+
+**Subsequent runs** — detects existing `DistributionId` in `.phase2-state.json`, skips all infrastructure and goes straight to build + sync + invalidate.
+
+Prints live URL, Distribution ID, and re-deploy hint on completion.
 
 ---
 
-### Step 2 — Request ACM Certificate (us-east-1)
+### Teardown
 
 ```powershell
-# Request certificate — MUST use --region us-east-1
-aws acm request-certificate `
-  --domain-name batch11.ostaddevops.click `
-  --validation-method DNS `
-  --region us-east-1 `
-  --profile sarowar-ostad
-# Output → save the CertificateArn value
+.\setup-phase2.ps1 -Teardown
 ```
 
-Get the DNS validation record to add to Route 53:
-
-```powershell
-aws acm describe-certificate `
-  --certificate-arn REPLACE_WITH_CERT_ARN `
-  --region us-east-1 `
-  --profile sarowar-ostad `
-  --query "Certificate.DomainValidationOptions[0].ResourceRecord"
-```
-
-Get your Route 53 Hosted Zone ID:
-
-```powershell
-aws route53 list-hosted-zones-by-name `
-  --dns-name ostaddevops.click `
-  --profile sarowar-ostad `
-  --query "HostedZones[0].Id" `
-  --output text
-# Output looks like: /hostedzone/Z1XXXXXXXXXX — use only the Z1XXXXXXXXXX part
-```
-
-Add the CNAME validation record (replace with values from `describe-certificate`):
-
-```powershell
-aws route53 change-resource-record-sets `
-  --hosted-zone-id REPLACE_WITH_ZONE_ID `
-  --change-batch '{
-    "Changes":[{
-      "Action":"CREATE",
-      "ResourceRecordSet":{
-        "Name":"REPLACE_WITH_CNAME_NAME_FROM_ACM",
-        "Type":"CNAME",
-        "TTL":300,
-        "ResourceRecords":[{"Value":"REPLACE_WITH_CNAME_VALUE_FROM_ACM"}]
-      }
-    }]
-  }' `
-  --profile sarowar-ostad
-```
-
-Wait for certificate to be issued:
-
-```powershell
-aws acm wait certificate-validated `
-  --certificate-arn REPLACE_WITH_CERT_ARN `
-  --region us-east-1 `
-  --profile sarowar-ostad
-# Returns when status = ISSUED (1-3 min)
-```
-
----
-
-### Step 3 — Create CloudFront OAC
-
-```powershell
-aws cloudfront create-origin-access-control `
-  --origin-access-control-config '{
-    "Name":"batch11-oac",
-    "Description":"OAC for batch11-ostaddevops-site",
-    "SigningProtocol":"sigv4",
-    "SigningBehavior":"always",
-    "OriginAccessControlOriginType":"s3"
-  }' `
-  --profile sarowar-ostad
-# Output → save the Id value (e.g. E1ABCDEF2GHIJK)
-```
-
----
-
-### Step 4 — Create CloudFront Distribution
-
-Edit `infra/cloudfront-distribution.json`:
-- Replace `REPLACE_WITH_OAC_ID` → OAC ID from Step 3
-- Replace `REPLACE_WITH_ACM_ARN_IN_US_EAST_1` → Certificate ARN from Step 2
-
-```powershell
-aws cloudfront create-distribution `
-  --distribution-config file://infra/cloudfront-distribution.json `
-  --profile sarowar-ostad
-# Output → save Id (Distribution ID) and DomainName (e.g. d1abc.cloudfront.net)
-```
-
----
-
-### Step 5 — Update S3 Bucket Policy
-
-Get your account ID:
-
-```powershell
-aws sts get-caller-identity `
-  --query Account `
-  --output text `
-  --profile sarowar-ostad
-```
-
-Edit `infra/bucket-policy-phase2.json`:
-- Replace `ACCOUNT_ID` → 12-digit account ID
-- Replace `DISTRIBUTION_ID` → Distribution ID from Step 4
-
-Apply the policy:
-
-```powershell
-aws s3api put-bucket-policy `
-  --bucket batch11-ostaddevops-site `
-  --policy file://infra/bucket-policy-phase2.json `
-  --profile sarowar-ostad
-```
-
----
-
-### Step 6 — Route 53 DNS — A Alias Record
-
-> `Z2FDTNDATAQYW2` is the **fixed** hosted zone ID for all CloudFront distributions (AWS hardcoded value).
-
-```powershell
-aws route53 change-resource-record-sets `
-  --hosted-zone-id REPLACE_WITH_ZONE_ID `
-  --change-batch '{
-    "Changes":[{
-      "Action":"CREATE",
-      "ResourceRecordSet":{
-        "Name":"batch11.ostaddevops.click",
-        "Type":"A",
-        "AliasTarget":{
-          "HostedZoneId":"Z2FDTNDATAQYW2",
-          "DNSName":"REPLACE_WITH_CLOUDFRONT_DOMAIN",
-          "EvaluateTargetHealth":false
-        }
-      }
-    }]
-  }' `
-  --profile sarowar-ostad
-```
-
----
-
-### Step 7 — Wait for CloudFront to Deploy
-
-```powershell
-aws cloudfront wait distribution-deployed `
-  --id REPLACE_WITH_DISTRIBUTION_ID `
-  --profile sarowar-ostad
-# Blocks until Status = Deployed (~5 min)
-```
-
----
-
-### Step 8 — Build & Deploy
-
-```powershell
-.\deploy.ps1 -DistributionId "REPLACE_WITH_DISTRIBUTION_ID"
-```
-
----
-
----
-
-# Option 2 — Migrate from Phase 1 (Public → Private)
-
-> The bucket already exists with Phase 1's public policy and static website hosting.
-> This upgrades it in-place — **same bucket, no re-upload required** after migration steps.
-
----
-
-## Option 2A — AWS Console (GUI)
-
-### Step 1 — Remove Public Access from the Bucket
-
-1. S3 → `batch11-ostaddevops-site` → **Permissions** tab
-2. **Bucket policy** → **Edit** → delete all content → **Save changes**
-3. **Block public access** → **Edit** → check all 4 boxes → **Save changes** → **Confirm**
-
----
-
-### Step 2 — Disable Static Website Hosting
-
-1. **Properties** tab → **Static website hosting** → **Edit**
-2. Select **Disable** → **Save changes**
-
----
-
-### Step 3 — Enable Encryption & Versioning
-
-1. **Properties** → **Default encryption** → **Edit** → **SSE-S3** → **Save changes**
-2. **Properties** → **Bucket Versioning** → **Edit** → **Enable** → **Save changes**
-
----
-
-### Steps 4–8 — Same as Option 1A Steps 2–8
-
-Follow **Option 1A** from **Step 2 (ACM Certificate)** onwards — they are identical.
-
----
-
----
-
-## Option 2B — AWS CLI
-
-### Step 1 — Harden the Existing Bucket
-
-```powershell
-# Remove the public read policy
-aws s3api delete-bucket-policy `
-  --bucket batch11-ostaddevops-site `
-  --profile sarowar-ostad
-
-# Re-enable Block Public Access
-aws s3api put-public-access-block `
-  --bucket batch11-ostaddevops-site `
-  --public-access-block-configuration `
-    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true `
-  --profile sarowar-ostad
-
-# Disable static website hosting
-aws s3api delete-bucket-website `
-  --bucket batch11-ostaddevops-site `
-  --profile sarowar-ostad
-
-# Enable versioning
-aws s3api put-bucket-versioning `
-  --bucket batch11-ostaddevops-site `
-  --versioning-configuration Status=Enabled `
-  --profile sarowar-ostad
-
-# Enable SSE-S3 encryption
-aws s3api put-bucket-encryption `
-  --bucket batch11-ostaddevops-site `
-  --server-side-encryption-configuration '{
-    "Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]
-  }' `
-  --profile sarowar-ostad
-
-# Verify bucket is now private
-aws s3api get-public-access-block `
-  --bucket batch11-ostaddevops-site `
-  --profile sarowar-ostad
-# All four values should be: true
-```
-
----
-
-### Steps 2–8 — Same as Option 1B Steps 2–8
-
-Follow **Option 1B** from **Step 2 (ACM Certificate)** onwards — they are identical.
-
-At the end, also run:
-
-```powershell
-# Flush any cached Phase 1 content from CloudFront
-aws cloudfront create-invalidation `
-  --distribution-id REPLACE_WITH_DISTRIBUTION_ID `
-  --paths "/*" `
-  --profile sarowar-ostad
-```
-
----
+Shows what will be removed, asks for confirmation (`y/N`), then removes in order:
+
+| Step | Action |
+|---|---|
+| 1/5 | Deletes Route 53 A alias |
+| 2/5 | Disables CloudFront distribution → waits for propagation → deletes it |
+| 3/5 | Deletes CloudFront OAC |
+| 4/5 | **Bucket created by script** → deletes all object versions + delete markers (versioning-safe), then deletes bucket |
+| 4/5 | **Bucket pre-existed** → removes bucket policy only; bucket and objects preserved |
+| 5/5 | Removes `.phase2-state.json` |
+
+> Each completed step is saved to state immediately — safe to re-run if interrupted mid-teardown.
 
 ---
 
@@ -501,45 +220,32 @@ aws cloudfront create-invalidation `
 
 | Check | Expected |
 |---|---|
-| Direct S3 REST URL returns | ✅ `403 Access Denied` — bucket is private |
-| `https://batch11.ostaddevops.click` loads | ✅ Site renders correctly |
-| `http://batch11.ostaddevops.click` | ✅ Redirects to `https://` |
-| Refresh on `/modules` | ✅ Returns 200 (SPA routing works) |
-| Browser padlock → certificate | ✅ Valid for `batch11.ostaddevops.click` |
+| Direct S3 REST URL | ✅ `403 Access Denied` — bucket is private |
+| `https://master.ostaddevops.click` | ✅ Site renders correctly |
+| `http://master.ostaddevops.click` | ✅ Redirects to `https://` |
+| Refresh on `/modules` | ✅ Returns 200 (SPA routing via custom error responses) |
+| Browser padlock → certificate | ✅ Valid for `master.ostaddevops.click` |
 | DevTools Response Headers | ✅ `Strict-Transport-Security`, `X-Frame-Options`, `X-Content-Type-Options` present |
 
 ---
 
-## deploy.ps1 Usage
-
-```powershell
-# Build + sync + invalidate CloudFront in one command
-.\deploy.ps1 -DistributionId "YOUR_DISTRIBUTION_ID"
-
-# Example
-.\deploy.ps1 -DistributionId "E3ABCDEF1GHIJK"
-```
-
-The script is at the project root: [`deploy.ps1`](deploy.ps1)
-
----
-
-## Key Facts to Remember
+## Key Facts
 
 | Fact | Why it matters |
 |---|---|
-| ACM certificate must be in `us-east-1` | Hard AWS requirement for CloudFront, regardless of bucket region |
-| Use S3 REST endpoint (not `.s3-website.`) as origin | S3 website endpoint doesn't support OAC signing |
-| Map both 403 AND 404 to `/index.html` | Private S3 returns 403 (not 404) for missing keys |
-| OAC signing = SigV4 | Required for S3 buckets outside `us-east-1` |
-| CloudFront hosted zone for alias = `Z2FDTNDATAQYW2` | Fixed AWS value for all CloudFront distributions globally |
-| Bucket name ≠ domain name | Avoids bucket enumeration attacks |
+| ACM cert must be in `us-east-1` | Hard AWS requirement for CloudFront, regardless of bucket region |
+| Use S3 REST endpoint as origin | `.s3-website.` endpoints don't support OAC SigV4 signing |
+| Map both **403 AND 404** to `/index.html` | Private S3 returns 403 (not 404) for missing keys |
+| Versioned bucket requires full version sweep on delete | `s3 rm --recursive` leaves versions behind — `delete-objects` on all versions is required |
+| CloudFront alias hosted zone = `Z2FDTNDATAQYW2` | Fixed AWS constant — same for every CloudFront distribution globally |
 
 ---
 
-## 🧑‍💻 Author
+## Project Lead
 
-*Md. Sarowar Alam*  
-Lead DevOps Engineer, Hogarth Worldwide  
-📧 Email: sarowar@hotmail.com  
+**MD Sarowar Alam**  
+Lead DevOps Engineer, WPP Production  
+📧 Email: [sarowar@hotmail.com](mailto:sarowar@hotmail.com)  
 🔗 LinkedIn: https://www.linkedin.com/in/sarowar/
+
+---

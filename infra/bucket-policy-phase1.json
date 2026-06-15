@@ -6,7 +6,7 @@
       "Effect": "Allow",
       "Principal": "*",
       "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::batch11-ostaddevops-site/*"
+      "Resource": "arn:aws:s3:::master-ostaddevops-site/*"
     }
   ]
 }

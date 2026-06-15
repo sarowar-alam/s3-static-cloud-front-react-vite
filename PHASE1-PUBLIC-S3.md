@@ -11,11 +11,10 @@ Deploy the React + Vite site using S3 Static Website Hosting with a public bucke
 
 | Name | Value |
 |---|---|
-| Bucket | `batch11-ostaddevops-site` |
+| Bucket | `master-ostaddevops-site` |
 | Region | `ap-south-1` |
 | AWS Profile | `sarowar-ostad` |
 | Policy file | `infra/bucket-policy-phase1.json` |
-| Deploy script | `deploy.ps1` |
 
 ---
 
@@ -24,7 +23,7 @@ Deploy the React + Vite site using S3 Static Website Hosting with a public bucke
 ### Step 1 — Create S3 Bucket
 
 1. Open [S3 Console](https://s3.console.aws.amazon.com/) → **Create bucket**
-2. **Bucket name:** `batch11-ostaddevops-site`
+2. **Bucket name:** `master-ostaddevops-site`
 3. **AWS Region:** `ap-south-1` (Asia Pacific — Mumbai)
 4. Under **Block Public Access settings:**
    - **Uncheck** `Block all public access`
@@ -61,7 +60,7 @@ Deploy the React + Vite site using S3 Static Website Hosting with a public bucke
          "Effect": "Allow",
          "Principal": "*",
          "Action": "s3:GetObject",
-         "Resource": "arn:aws:s3:::batch11-ostaddevops-site/*"
+         "Resource": "arn:aws:s3:::master-ostaddevops-site/*"
        }
      ]
    }
@@ -75,19 +74,19 @@ Deploy the React + Vite site using S3 Static Website Hosting with a public bucke
 In your VS Code terminal:
 
 ```powershell
-cd batch11-site
+cd master-site
 npm run build
 ```
 
-This creates the `batch11-site/dist/` folder with production-ready files.
+This creates the `master-site/dist/` folder with production-ready files.
 
 ---
 
 ### Step 5 — Upload Files to S3
 
 1. Open the bucket → **Objects** tab → click **Upload**
-2. Click **Add files** — select all files directly inside `batch11-site/dist/`
-3. Click **Add folder** — select the `assets/` folder inside `batch11-site/dist/`
+2. Click **Add files** — select all files directly inside `master-site/dist/`
+3. Click **Add folder** — select the `assets/` folder inside `master-site/dist/`
 4. Click **Upload**
 
 > **Tip:** Make sure `index.html` is uploaded at the **root** of the bucket, not inside a subfolder.
@@ -99,7 +98,7 @@ This creates the `batch11-site/dist/` folder with production-ready files.
 Open the **Bucket website endpoint** URL from Step 2 in your browser.
 
 ```
-http://batch11-ostaddevops-site.s3-website.ap-south-1.amazonaws.com
+http://master-ostaddevops-site.s3-website.ap-south-1.amazonaws.com
 ```
 
 ✅ You should see your site loaded over `http://`.
@@ -116,7 +115,7 @@ Run all commands from the **project root** (`Class-02/`).
 
 ```powershell
 aws s3api create-bucket `
-  --bucket batch11-ostaddevops-site `
+  --bucket master-ostaddevops-site `
   --region ap-south-1 `
   --create-bucket-configuration LocationConstraint=ap-south-1 `
   --profile sarowar-ostad
@@ -128,7 +127,7 @@ aws s3api create-bucket `
 
 ```powershell
 aws s3api delete-public-access-block `
-  --bucket batch11-ostaddevops-site `
+  --bucket master-ostaddevops-site `
   --profile sarowar-ostad
 ```
 
@@ -136,7 +135,7 @@ Verify it worked:
 
 ```powershell
 aws s3api get-public-access-block `
-  --bucket batch11-ostaddevops-site `
+  --bucket master-ostaddevops-site `
   --profile sarowar-ostad
 ```
 
@@ -147,7 +146,7 @@ All four values should be `false`.
 ### Step 3 — Enable Static Website Hosting
 
 ```powershell
-aws s3 website s3://batch11-ostaddevops-site/ `
+aws s3 website s3://master-ostaddevops-site/ `
   --index-document index.html `
   --error-document index.html `
   --profile sarowar-ostad
@@ -159,23 +158,22 @@ aws s3 website s3://batch11-ostaddevops-site/ `
 
 ```powershell
 aws s3api put-bucket-policy `
-  --bucket batch11-ostaddevops-site `
+  --bucket master-ostaddevops-site `
   --policy file://infra/bucket-policy-phase1.json `
   --profile sarowar-ostad
 ```
 
 ---
 
-### Step 5 — Build & Deploy with deploy.ps1
+### Step 5 — Build & Deploy
 
 ```powershell
-.\deploy.ps1 -SkipInvalidation
+cd master-site
+npm install       # first time only
+npm run build
+cd ..
+aws s3 sync master-site/dist/ s3://master-ostaddevops-site --delete --profile sarowar-ostad
 ```
-
-This script:
-1. Runs `npm run build` inside `batch11-site/`
-2. Syncs `dist/` to `s3://batch11-ostaddevops-site` with `--delete`
-3. Skips CloudFront invalidation (not needed in Phase 1)
 
 ---
 
@@ -183,15 +181,48 @@ This script:
 
 ```powershell
 aws s3api get-bucket-website `
-  --bucket batch11-ostaddevops-site `
+  --bucket master-ostaddevops-site `
   --profile sarowar-ostad
 ```
 
 Or construct it directly:
 
 ```
-http://batch11-ostaddevops-site.s3-website.ap-south-1.amazonaws.com
+http://master-ostaddevops-site.s3-website.ap-south-1.amazonaws.com
 ```
+
+---
+
+## Option C — PowerShell Script (Automated)
+
+Runs all Option B steps in one command. Must be executed from the **project root**.
+
+### Setup
+
+```powershell
+.\setup-phase1.ps1
+```
+
+Performs all 5 steps automatically:
+1. Creates the S3 bucket (skips if it already exists) — saves state immediately either way
+2. Removes Block Public Access
+3. Enables static website hosting
+4. Applies `infra/bucket-policy-phase1.json`
+5. Runs `npm install` if `node_modules` is missing, builds the React app, and syncs `dist/` to S3
+
+Prints the live test URL on completion.
+
+### Teardown
+
+```powershell
+.\setup-phase1.ps1 -Teardown
+```
+
+Asks for confirmation, then reverses Phase 1:
+- If the bucket **was created by the script** → empties and deletes it entirely
+- If the bucket **pre-existed** → only removes the policy and website config; bucket and its contents are preserved
+
+> State is tracked in `.phase1-state.json` (auto-created, gitignored). It records whether the bucket was created by this script or pre-existed. Do not delete it between setup and teardown — teardown uses it to decide whether to delete the bucket or only remove its config.
 
 ---
 
@@ -208,14 +239,16 @@ http://batch11-ostaddevops-site.s3-website.ap-south-1.amazonaws.com
 
 ## What's Next?
 
-When you're ready to add HTTPS and a custom domain (`batch11.ostaddevops.click`),
+When you're ready to add HTTPS and a custom domain (`master.ostaddevops.click`),
 follow **PHASE2-PRIVATE-CLOUDFRONT.md** — either starting fresh or migrating from this setup.
 
 ---
 
-## 🧑‍💻 Author
+## Project Lead
 
-*Md. Sarowar Alam*  
-Lead DevOps Engineer, Hogarth Worldwide  
-📧 Email: sarowar@hotmail.com  
+**MD Sarowar Alam**  
+Lead DevOps Engineer, WPP Production  
+📧 Email: [sarowar@hotmail.com](mailto:sarowar@hotmail.com)  
 🔗 LinkedIn: https://www.linkedin.com/in/sarowar/
+
+---

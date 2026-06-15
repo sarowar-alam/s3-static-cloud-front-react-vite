@@ -1,16 +1,16 @@
 {
-  "CallerReference": "batch11-site-2026",
+  "CallerReference": "master-site-2026",
   "Aliases": {
     "Quantity": 1,
-    "Items": ["batch11.ostaddevops.click"]
+    "Items": ["master.ostaddevops.click"]
   },
   "DefaultRootObject": "index.html",
   "Origins": {
     "Quantity": 1,
     "Items": [
       {
-        "Id": "S3-batch11-ostaddevops-site",
-        "DomainName": "batch11-ostaddevops-site.s3.ap-south-1.amazonaws.com",
+        "Id": "S3-master-ostaddevops-site-private",
+        "DomainName": "master-ostaddevops-site-private.s3.ap-south-1.amazonaws.com",
         "S3OriginConfig": {
           "OriginAccessIdentity": ""
         },
@@ -19,7 +19,7 @@
     ]
   },
   "DefaultCacheBehavior": {
-    "TargetOriginId": "S3-batch11-ostaddevops-site",
+      "TargetOriginId": "S3-master-ostaddevops-site-private",
     "ViewerProtocolPolicy": "redirect-to-https",
     "AllowedMethods": {
       "Quantity": 2,
@@ -49,13 +49,13 @@
       }
     ]
   },
-  "Comment": "batch11.ostaddevops.click static site distribution",
+  "Comment": "master.ostaddevops.click static site distribution",
   "Enabled": true,
   "HttpVersion": "http2",
   "IsIPV6Enabled": true,
   "PriceClass": "PriceClass_All",
   "ViewerCertificate": {
-    "ACMCertificateArn": "REPLACE_WITH_ACM_ARN_IN_US_EAST_1",
+    "ACMCertificateArn": "arn:aws:acm:us-east-1:388779989543:certificate/392fe338-b0b8-4aeb-ac2c-c930b219bb13",
     "SSLSupportMethod": "sni-only",
     "MinimumProtocolVersion": "TLSv1.2_2021"
   }

@@ -1,13 +1,17 @@
 # Build output — never commit
-batch11-site/dist/
+master-site/dist/
 
 # Dependencies — install with npm install
-batch11-site/node_modules/
+master-site/node_modules/
 
 # Local env files — may contain secrets
 .env
 .env.local
 .env.*.local
+
+# Phase setup state — local only
+.phase1-state.json
+.phase2-state.json
 
 # OS files
 .DS_Store

@@ -1,537 +1,546 @@
-# batch11.ostaddevops.click
+# Static Site Deployment on AWS — S3 + CloudFront + HTTPS + Custom Domain
 
-Course landing page for **Mastering DevOps: From Fundamentals to Advanced Practices — Batch 11**, hosted on [ostad.app](https://ostad.app/).
-
-**Live URL (Phase 2):** https://batch11.ostaddevops.click  
-**Instructor:** MD Sarowar Alam — Lead DevOps Engineer, WPPProduction
-
----
-
-## Table of Contents
-
-1. [Architecture Overview](#1-architecture-overview)
-2. [Repository Structure](#2-repository-structure)
-3. [Prerequisites](#3-prerequisites)
-4. [Local Development](#4-local-development)
-5. [Infrastructure — Phase 1 (Public S3)](#5-infrastructure--phase-1-public-s3)
-6. [Infrastructure — Phase 2 (Private S3 + CloudFront)](#6-infrastructure--phase-2-private-s3--cloudfront)
-7. [Deployment](#7-deployment)
-8. [Operational Tasks](#8-operational-tasks)
-9. [Introducing Changes](#9-introducing-changes)
-10. [Design Decisions](#10-design-decisions)
-11. [Troubleshooting](#11-troubleshooting)
-12. [Key Reference Values](#12-key-reference-values)
+**Course:** Mastering DevOps — Module 3 (AWS Static Site Hosting)  
+**Author:** MD Sarowar Alam · Lead DevOps Engineer, WPP Production  
+**Live URL:** https://master.ostaddevops.click  
+**Domain:** `master.ostaddevops.click` (Route 53 → CloudFront)
 
 ---
 
-## 1. Architecture Overview
+## 1. Project Overview
 
-```
-Browser
-   │
-   ▼
-Route 53  (A alias record — batch11.ostaddevops.click)
-   │
-   ▼
-CloudFront Distribution  (HTTPS, TLSv1.2_2021, SecurityHeadersPolicy)
-   │  ├─ OAC (Origin Access Control, SigV4 signing)
-   │  ├─ Default root object: index.html
-   │  ├─ Error 403 → /index.html  HTTP 200  (SPA routing)
-   │  └─ Error 404 → /index.html  HTTP 200  (SPA routing)
-   │
-   ▼
-S3 Bucket  (batch11-ostaddevops-site, ap-south-1)
-   ├─ Private — no public access
-   ├─ SSE-S3 encryption at rest
-   ├─ Versioning enabled
-   └─ dist/  ← React + Vite production build
-```
-
-### Two-Phase Deployment Model
-
-The infrastructure is deliberately designed in two phases — both use the **same S3 bucket**, reconfigured between phases. No resources are wasted or duplicated.
+This repository demonstrates two progressive deployment strategies for a React + Vite single-page application (SPA) on AWS, starting from the simplest possible approach and evolving to a production-grade architecture:
 
 | | Phase 1 | Phase 2 |
 |---|---|---|
-| Purpose | Learning, quick iteration | Production, custom domain |
-| Bucket access | Public (required for S3 website hosting) | Private (OAC only) |
-| HTTPS | ❌ | ✅ (ACM + CloudFront) |
-| Custom domain | ❌ | ✅ `batch11.ostaddevops.click` |
-| Security headers | ❌ | ✅ AWS SecurityHeadersPolicy |
-| Deploy command | `.\deploy.ps1 -SkipInvalidation` | `.\deploy.ps1 -DistributionId "..."` |
+| **Goal** | Fastest path to a live static site | Production-grade with HTTPS + private origin |
+| **Bucket access** | Public (S3 website hosting) | Private (CloudFront OAC only) |
+| **HTTPS** | ❌ HTTP only | ✅ TLS 1.2+ via ACM |
+| **Custom domain** | ❌ | ✅ `master.ostaddevops.click` |
+| **CDN** | ❌ | ✅ CloudFront (global edge) |
+| **Security headers** | ❌ | ✅ AWS `SecurityHeadersPolicy` |
+| **SPA routing** | ✅ via S3 error document | ✅ via CloudFront custom error responses |
+| **Setup script** | `.\setup-phase1.ps1` | `.\setup-phase2.ps1` |
+
+Both phases are **fully independent** — they use separate S3 buckets and can coexist.
 
 ---
 
-## 2. Repository Structure
+## 2. Architecture Overview
+
+### Phase 1 — Public S3 Static Website
 
 ```
-Class-02/
-├── batch11-site/               # React + Vite frontend application
-│   ├── index.html              # HTML shell — Vite entry point
-│   ├── vite.config.js          # Vite config — React + Tailwind CSS plugins
-│   ├── package.json            # Dependencies (React 19, React Router v7, Tailwind v4)
+Browser ──HTTP──► S3 Static Website Endpoint
+                  (master-ostaddevops-site, ap-south-1)
+                  Public read policy applied
+                  SPA routing: error doc = index.html
+```
+
+### Phase 2 — Private S3 + CloudFront + HTTPS
+
+```
+Browser
+  │
+  ├─HTTPS─► Route 53 (A alias)
+  │          master.ostaddevops.click
+  │          └─► CloudFront Distribution
+  │               ├─ ACM cert (us-east-1, TLS 1.2+)
+  │               ├─ OAC SigV4 signing
+  │               ├─ SecurityHeadersPolicy (HSTS, X-Frame, X-Content-Type)
+  │               ├─ CachingOptimized policy
+  │               ├─ 403 → /index.html (200)  ← SPA routing
+  │               ├─ 404 → /index.html (200)  ← SPA routing
+  │               └─► S3 REST Endpoint (private)
+  │                    master-ostaddevops-site-private
+  │                    ap-south-1
+  │                    Block Public Access: ON
+  │                    Versioning: enabled
+  │                    Encryption: SSE-S3 (AES-256)
+  │                    Bucket policy: OAC source ARN only
+  └─HTTP──► CloudFront redirects to HTTPS
+```
+
+**Data flow:**
+1. Browser resolves `master.ostaddevops.click` → CloudFront IP via Route 53 A alias
+2. CloudFront terminates TLS, checks cache
+3. On cache miss: CloudFront signs request with SigV4 OAC and fetches from private S3
+4. CloudFront adds security headers and returns response to browser
+5. React Router handles client-side navigation; unknown paths return `index.html` (200) for SPA routing
+
+---
+
+## 3. Technology Stack
+
+| Layer | Technology | Version | Purpose |
+|---|---|---|---|
+| Frontend | React | 19.1.0 | UI framework |
+| Frontend | React Router DOM | 7.5.0 | Client-side SPA routing (`BrowserRouter`) |
+| Frontend | Tailwind CSS | 4.1.3 | Utility-first CSS (via Vite plugin) |
+| Build tool | Vite | 6.3.1 | Dev server + production bundler |
+| CDN | AWS CloudFront | — | Global edge delivery, HTTPS termination |
+| Object storage | AWS S3 | — | Static asset hosting (private in Phase 2) |
+| DNS | AWS Route 53 | — | A alias record → CloudFront |
+| TLS | AWS ACM | — | Free managed certificate (`us-east-1`) |
+| TLS issuance | Let's Encrypt + Certbot | 5.6.0 | Certificate issuance via DNS-01 challenge |
+| Certbot plugin | `certbot-dns-route53` | — | Automated DNS validation via Route 53 |
+| CLI | AWS CLI | v2 | Infrastructure provisioning |
+| Scripting | PowerShell | 5.1+ | Automation scripts (`setup-phase1/2.ps1`) |
+| Scripting | Bash | — | Certificate script (`certbot-import.sh`) |
+| Runtime (cert) | Python | 3.11+ | Certbot runtime |
+
+---
+
+## 4. Repository Structure
+
+```
+.
+├── master-site/                        # React + Vite SPA source
+│   ├── index.html                      # HTML shell (Vite entry point)
+│   ├── vite.config.js                  # Vite: React + Tailwind CSS plugins
+│   ├── package.json                    # Node dependencies
 │   └── src/
-│       ├── main.jsx            # React root — BrowserRouter wraps the app
-│       ├── App.jsx             # Route definitions (/, /about, /modules, /contact)
-│       ├── index.css           # @import "tailwindcss" — single directive
+│       ├── main.jsx                    # React root — BrowserRouter wrapper
+│       ├── App.jsx                     # Route definitions (/, /about, /modules, /contact)
+│       ├── index.css                   # @import "tailwindcss"
 │       ├── components/
-│       │   ├── Navbar.jsx      # Sticky responsive navigation with mobile menu
-│       │   └── Footer.jsx      # Footer with links, socials, copyright
+│       │   ├── Navbar.jsx              # Responsive sticky navigation
+│       │   └── Footer.jsx              # Footer with links and socials
 │       └── pages/
-│           ├── Home.jsx        # Hero, stats, features, tools, phase journey, CTA
-│           ├── About.jsx       # Program info, learning objectives, instructor
-│           ├── Modules.jsx     # All 12 course modules with live class breakdowns
-│           └── Contact.jsx     # Contact cards, enroll CTA, FAQ accordion
+│           ├── Home.jsx                # Hero, features, phase journey, CTA
+│           ├── About.jsx               # Program info and instructor
+│           ├── Modules.jsx             # 12 course modules with breakdowns
+│           └── Contact.jsx             # Contact cards, FAQ accordion
 │
 ├── infra/
-│   ├── bucket-policy-phase1.json       # Public read policy (Phase 1 only)
-│   ├── bucket-policy-phase2.json       # OAC-scoped private policy (Phase 2)
+│   ├── bucket-policy-phase1.json       # S3 public read policy (Phase 1)
+│   ├── bucket-policy-phase2.json       # S3 OAC-scoped private policy (Phase 2)
 │   └── cloudfront-distribution.json   # CloudFront distribution config template
 │
-├── deploy.ps1                  # One-command deploy: build → S3 sync → CF invalidate
-├── .gitignore                  # Excludes dist/, node_modules/, .env files
-├── PHASE1-PUBLIC-S3.md         # Step-by-step Phase 1 guide (Console + CLI)
-└── PHASE2-PRIVATE-CLOUDFRONT.md  # Step-by-step Phase 2 guide (Console + CLI, 2 paths)
+├── setup-phase1.ps1                    # Phase 1 full automation: setup + teardown
+├── setup-phase2.ps1                    # Phase 2 full automation: setup + teardown
+├── certbot-import.sh                   # Let's Encrypt cert issuance + ACM import
+├── PHASE1-PUBLIC-S3.md                 # Phase 1 step-by-step guide (GUI + script)
+├── PHASE2-PRIVATE-CLOUDFRONT.md        # Phase 2 step-by-step guide (GUI + script)
+├── .gitignore                          # Excludes dist/, node_modules/, state files
+└── README.md                           # This file
 ```
 
-> `batch11-site/dist/` and `batch11-site/node_modules/` are **not committed**. They are generated locally.
+**Not committed (gitignored):**
+- `master-site/dist/` — Vite production build output
+- `master-site/node_modules/` — npm dependencies
+- `.phase1-state.json` / `.phase2-state.json` — local setup state (teardown tracking)
+- `.env`, `.env.local` — environment secrets
 
 ---
 
-## 3. Prerequisites
+## 5. Application Routes
 
-### Required on your machine
-
-| Tool | Minimum version | Install |
+| Path | Component | Description |
 |---|---|---|
-| Node.js | 18 LTS or later | https://nodejs.org |
-| npm | 9 or later | Included with Node.js |
-| AWS CLI | v2 | https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html |
-| Git | Any recent | https://git-scm.com |
-| PowerShell | 5.1+ (Windows built-in) | Built into Windows 11 |
+| `/` | `Home.jsx` | Hero section, features, tools, phase journey, CTA |
+| `/about` | `About.jsx` | Program overview, learning objectives, instructor |
+| `/modules` | `Modules.jsx` | All 12 DevOps course modules with live class breakdowns |
+| `/contact` | `Contact.jsx` | Contact cards, enrolment CTA, FAQ accordion |
 
-Verify your setup:
+All routes are client-side (React Router `BrowserRouter`). Direct URL access and page refresh work because CloudFront is configured to return `index.html` with HTTP 200 for both 403 and 404 errors.
+
+---
+
+## 6. Infrastructure
+
+### AWS Resources — Phase 1
+
+| Resource | Name / Value |
+|---|---|
+| S3 Bucket | `master-ostaddevops-site` (ap-south-1) |
+| Bucket access | Public (Block Public Access OFF) |
+| Website hosting | Enabled — index doc: `index.html`, error doc: `index.html` |
+| Bucket policy | `infra/bucket-policy-phase1.json` (public `s3:GetObject`) |
+| Endpoint | `http://master-ostaddevops-site.s3-website.ap-south-1.amazonaws.com` |
+
+### AWS Resources — Phase 2
+
+| Resource | Name / Value |
+|---|---|
+| S3 Bucket | `master-ostaddevops-site-private` (ap-south-1) |
+| Bucket access | Private (Block Public Access ON) |
+| Versioning | Enabled |
+| Encryption | SSE-S3 (AES-256) |
+| Bucket policy | `infra/bucket-policy-phase2.json` (OAC source ARN only) |
+| OAC | `master-oac` (SigV4, always-sign, S3 type) |
+| CloudFront | Alias: `master.ostaddevops.click`, HTTP/2, IPv6 |
+| Cache policy | `658327ea-f89d-4fab-a63d-7e88639e58f6` (CachingOptimized) |
+| Response headers | `67f7725c-6f97-4210-82d7-5512b31e9d03` (SecurityHeadersPolicy) |
+| ACM Certificate | `us-east-1` (required for CloudFront) — Let's Encrypt via Certbot |
+| Route 53 | A alias: `master.ostaddevops.click` → CloudFront (`Z2FDTNDATAQYW2`) |
+| Hosted Zone | `ostaddevops.click` / `Z1019653XLWIJ02C53P5` |
+
+### Infrastructure Templates
+
+| File | Purpose | Placeholders |
+|---|---|---|
+| `infra/bucket-policy-phase1.json` | Public read — Phase 1 | None |
+| `infra/bucket-policy-phase2.json` | OAC-only access — Phase 2 | `ACCOUNT_ID`, `DISTRIBUTION_ID` (resolved at runtime by script) |
+| `infra/cloudfront-distribution.json` | CloudFront distribution config | `REPLACE_WITH_OAC_ID` (patched in-memory by script, file never modified) |
+
+---
+
+## 7. Automation Scripts
+
+### `setup-phase1.ps1`
+
+Self-contained Phase 1 automation. No external dependencies.
 
 ```powershell
-node --version       # v18+
-npm --version        # 9+
-aws --version        # aws-cli/2.x
-git --version
+.\setup-phase1.ps1           # Setup: create bucket + configure + build + deploy
+.\setup-phase1.ps1 -Teardown # Teardown: reverse all Phase 1 changes
 ```
 
-### AWS Named Profile
+**Setup steps (1–5):**
+1. Create `master-ostaddevops-site` bucket (idempotent; saves `BucketCreatedByUs` to state)
+2. Remove Block Public Access
+3. Enable static website hosting (`index.html` / `index.html`)
+4. Apply `infra/bucket-policy-phase1.json`
+5. `npm install` (if missing) → `npm run build` → `aws s3 sync --delete`
 
-All AWS CLI commands use the named profile `sarowar-ostad`. Ensure it is configured:
+**Teardown behaviour:**
+- Bucket created by script → empties and deletes it
+- Bucket pre-existed → removes policy + website config + restores Block Public Access only
+
+State: `.phase1-state.json` (gitignored)
+
+---
+
+### `setup-phase2.ps1`
+
+Self-contained Phase 2 automation. Fully independent of Phase 1.
+
+```powershell
+.\setup-phase2.ps1           # First run: full infra + deploy. Subsequent runs: re-deploy only
+.\setup-phase2.ps1 -Teardown # Teardown: reverse all Phase 2 changes
+```
+
+**Setup steps (1–7):**
+1. Create `master-ostaddevops-site-private` (idempotent); harden: Block Public Access ON, versioning, SSE-S3
+2. Create CloudFront OAC (`master-oac`, SigV4)
+3. Create CloudFront distribution (patches template in-memory — template file never modified on disk)
+4. Apply OAC-only bucket policy (`ACCOUNT_ID` + `DISTRIBUTION_ID` resolved at runtime)
+5. Create Route 53 A alias UPSERT → CloudFront
+6. Wait for CloudFront to deploy (~5–15 min)
+7. `npm install` (if missing) → `npm run build` → `aws s3 sync --delete` → CloudFront invalidation
+
+**Re-deploy (subsequent runs):** detects `DistributionId` in `.phase2-state.json`, skips infra, runs build + sync + invalidation only.
+
+**Teardown behaviour (5 steps, reverse order):**
+1. Delete Route 53 A alias
+2. Disable CloudFront → wait → delete distribution
+3. Delete OAC
+4. Bucket created by script → delete all object versions + delete markers (versioning-safe) → delete bucket
+5. Remove `.phase2-state.json`
+
+State: `.phase2-state.json` (gitignored)
+
+---
+
+### `certbot-import.sh`
+
+Issues or renews a Let's Encrypt certificate via DNS-01 challenge (Route 53) and imports it into AWS ACM.
+
+```bash
+# Run from Git Bash as Administrator
+./certbot-import.sh -d master.ostaddevops.click -e sarowar@hotmail.com -p sarowar-ostad
+
+# Options
+./certbot-import.sh -d DOMAIN -e EMAIL [-r REGION] [-p AWS_PROFILE]
+```
+
+**Behaviour:**
+- If cert already exists in ACM → re-imports with same ARN (`--certificate-arn`)
+- If new domain → fresh import, captures new ARN
+- Default region: `us-east-1` (required for CloudFront)
+
+**Requirements:** Git Bash (Admin), Python 3.11+, `pip install certbot certbot-dns-route53`, AWS CLI v2
+
+---
+
+## 8. Prerequisites
+
+| Tool | Minimum Version | Install |
+|---|---|---|
+| Node.js | 18+ | https://nodejs.org |
+| npm | 9+ | Bundled with Node.js |
+| AWS CLI | v2 | https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html |
+| PowerShell | 5.1+ | Built-in on Windows; `winget install Microsoft.PowerShell` for v7 |
+| Git Bash (cert only) | — | https://gitforwindows.org (run as Administrator for Certbot) |
+| Python (cert only) | 3.11+ | https://www.python.org/downloads/ |
+| certbot (cert only) | 5.6+ | `pip install certbot certbot-dns-route53` |
+
+**AWS configuration:**
 
 ```powershell
 aws configure --profile sarowar-ostad
+# Enter: Access Key ID, Secret Access Key, default region (ap-south-1), output (json)
 ```
 
-You will be prompted for:
-- AWS Access Key ID
-- AWS Secret Access Key
-- Default region: `ap-south-1`
-- Default output format: `json`
+**Required IAM permissions:**
 
-Verify the profile works:
-
-```powershell
-aws sts get-caller-identity --profile sarowar-ostad
-```
-
-### AWS Permissions Required
-
-The IAM user/role behind `sarowar-ostad` needs these permissions:
-
-| Service | Actions needed |
+| Service | Actions |
 |---|---|
-| S3 | `s3:CreateBucket`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket`, `s3:GetBucketWebsite`, `s3:PutBucketWebsite`, `s3:PutBucketPolicy`, `s3:DeleteBucketPolicy`, `s3:PutBucketVersioning`, `s3:PutEncryptionConfiguration`, `s3:PutPublicAccessBlock` |
-| CloudFront | `cloudfront:CreateDistribution`, `cloudfront:UpdateDistribution`, `cloudfront:CreateInvalidation`, `cloudfront:CreateOriginAccessControl` |
-| ACM | `acm:RequestCertificate`, `acm:DescribeCertificate`, `acm:ListCertificates` (region: us-east-1) |
-| Route 53 | `route53:ChangeResourceRecordSets`, `route53:ListHostedZones` |
+| S3 | `s3:CreateBucket`, `s3:DeleteBucket`, `s3:PutObject`, `s3:DeleteObject`, `s3:PutBucketPolicy`, `s3:DeleteBucketPolicy`, `s3:PutBucketWebsite`, `s3:PutPublicAccessBlock`, `s3:PutBucketVersioning`, `s3:PutEncryptionConfiguration`, `s3:ListBucketVersions`, `s3:DeleteObjectVersion` |
+| CloudFront | `cloudfront:CreateDistribution`, `cloudfront:UpdateDistribution`, `cloudfront:DeleteDistribution`, `cloudfront:CreateOriginAccessControl`, `cloudfront:DeleteOriginAccessControl`, `cloudfront:CreateInvalidation` |
+| Route 53 | `route53:ChangeResourceRecordSets`, `route53:ListHostedZones`, `route53:GetChange` |
+| ACM | `acm:ImportCertificate`, `acm:ListCertificates`, `acm:DescribeCertificate` |
 | STS | `sts:GetCallerIdentity` |
 
 ---
 
-## 4. Local Development
-
-### First-time setup
+## 9. Local Development Setup
 
 ```powershell
-# Clone the repository
+# 1. Clone the repository
 git clone <repo-url>
-cd "Class-02"
+cd s3-static-cloud-front-react-vite
 
-# Install frontend dependencies
-cd batch11-site
+# 2. Install frontend dependencies
+cd master-site
 npm install
-```
 
-### Start the dev server
-
-```powershell
-# From inside batch11-site/
+# 3. Start development server (hot reload)
 npm run dev
+# → http://localhost:5173
 ```
 
-Opens at **http://localhost:5173** with hot-module replacement (HMR).
+No environment variables are required for local development. The app is a fully static SPA with no backend API calls.
 
-All four routes are accessible locally:
+---
 
-| Route | Page |
-|---|---|
-| `/` | Home |
-| `/about` | About |
-| `/modules` | Modules |
-| `/contact` | Contact |
-
-> The dev server handles SPA routing automatically. You do not need to configure anything extra.
-
-### Build for production (dry-run)
+## 10. Build
 
 ```powershell
-# From inside batch11-site/
+cd master-site
 npm run build
+# Output: master-site/dist/
+#   index.html          (~0.72 kB)
+#   assets/index-*.css  (~35 kB, gzip ~6 kB)
+#   assets/index-*.js   (~266 kB, gzip ~83 kB)
+#   favicon.svg
 ```
 
-Output lands in `batch11-site/dist/`. Inspect it:
-
-```powershell
-ls dist/
-ls dist/assets/
-```
-
-### Preview the production build locally
+Preview the production build locally:
 
 ```powershell
 npm run preview
-```
-
-Serves the `dist/` folder at **http://localhost:4173** — identical to what S3/CloudFront will serve.
-
----
-
-## 5. Infrastructure — Phase 1 (Public S3)
-
-> Full step-by-step guide (Console + CLI): see [PHASE1-PUBLIC-S3.md](PHASE1-PUBLIC-S3.md)
-
-**Summary of CLI commands:**
-
-```powershell
-# Run from project root (Class-02/)
-
-# 1. Create bucket
-aws s3api create-bucket `
-  --bucket batch11-ostaddevops-site `
-  --region ap-south-1 `
-  --create-bucket-configuration LocationConstraint=ap-south-1 `
-  --profile sarowar-ostad
-
-# 2. Remove Block Public Access
-aws s3api delete-public-access-block `
-  --bucket batch11-ostaddevops-site `
-  --profile sarowar-ostad
-
-# 3. Enable static website hosting
-aws s3 website s3://batch11-ostaddevops-site/ `
-  --index-document index.html `
-  --error-document index.html `
-  --profile sarowar-ostad
-
-# 4. Apply public read policy
-aws s3api put-bucket-policy `
-  --bucket batch11-ostaddevops-site `
-  --policy file://infra/bucket-policy-phase1.json `
-  --profile sarowar-ostad
-
-# 5. Build and deploy
-.\deploy.ps1 -SkipInvalidation
-```
-
-**Test URL:**
-```
-http://batch11-ostaddevops-site.s3-website.ap-south-1.amazonaws.com
+# → http://localhost:4173
 ```
 
 ---
 
-## 6. Infrastructure — Phase 2 (Private S3 + CloudFront)
+## 11. Deployment
 
-> Full step-by-step guide (Console + CLI, two paths): see [PHASE2-PRIVATE-CLOUDFRONT.md](PHASE2-PRIVATE-CLOUDFRONT.md)
-
-Two paths are documented:
-- **Option 1** — Fresh setup (no Phase 1 done)
-- **Option 2** — Migrate from Phase 1 (bucket already exists)
-
-### Prerequisites for Phase 2
-
-Before running Phase 2 CLI commands, you need two values. Record them:
+### Phase 1 — First run (creates infrastructure + deploys)
 
 ```powershell
-# Your AWS Account ID
-aws sts get-caller-identity --query Account --output text --profile sarowar-ostad
-
-# Your Route 53 Hosted Zone ID for ostaddevops.click
-aws route53 list-hosted-zones-by-name `
-  --dns-name ostaddevops.click `
-  --query "HostedZones[0].Id" `
-  --output text `
-  --profile sarowar-ostad
-# Strip the /hostedzone/ prefix — keep only the ID (e.g. Z1XXXXXXXX)
+# From project root
+.\setup-phase1.ps1
 ```
 
-### Critical constraints
+### Phase 1 — Re-deploy after code changes
 
-| Constraint | Why |
+```powershell
+.\setup-phase1.ps1
+# State file present → skips bucket creation, runs build + sync directly
+```
+
+### Phase 2 — First run (creates full infrastructure + deploys, ~15 min)
+
+```powershell
+.\setup-phase2.ps1
+```
+
+### Phase 2 — Re-deploy after code changes
+
+```powershell
+.\setup-phase2.ps1
+# DistributionId present in .phase2-state.json → build + sync + invalidation only
+```
+
+### Phase 1 — Teardown
+
+```powershell
+.\setup-phase1.ps1 -Teardown
+```
+
+### Phase 2 — Teardown
+
+```powershell
+.\setup-phase2.ps1 -Teardown
+# Disabling CloudFront before deletion takes ~5-15 min
+```
+
+---
+
+## 12. Certificate Management
+
+The TLS certificate for `master.ostaddevops.click` is managed by Let's Encrypt and imported into ACM (`us-east-1`).
+
+**Current certificate ARN:**
+```
+arn:aws:acm:us-east-1:388779989543:certificate/392fe338-b0b8-4aeb-ac2c-c930b219bb13
+```
+
+**To renew or re-issue** (run from Git Bash as Administrator):
+
+```bash
+./certbot-import.sh -d master.ostaddevops.click -e sarowar@hotmail.com -p sarowar-ostad
+```
+
+The script detects the existing ACM certificate and re-imports it with the same ARN — no CloudFront update needed.
+
+**Certificate validity:** Let's Encrypt certificates are valid for 90 days. Renew before expiry.
+
+---
+
+## 13. Security Controls
+
+| Control | Implementation |
 |---|---|
-| ACM certificate **must** be requested in `us-east-1` | Hard AWS requirement for CloudFront — regardless of your S3 bucket region |
-| CloudFront origin must be the **S3 REST endpoint**, not the website endpoint | S3 website endpoint does not support OAC signing |
-| Map **both 403 and 404** to `/index.html` in CloudFront custom error responses | A private S3 bucket returns `403` (not `404`) for missing object keys — both must be handled for SPA routing |
-| OAC signing protocol must be **SigV4** | Required for cross-region S3 buckets (bucket is in ap-south-1) |
-| CloudFront Route 53 alias hosted zone ID is always **`Z2FDTNDATAQYW2`** | This is a fixed AWS global value for all CloudFront distributions |
-
-### After Phase 2 infra is created — fill in the templates
-
-Before deploying, update the two placeholder files:
-
-**`infra/bucket-policy-phase2.json`** — replace:
-- `ACCOUNT_ID` → your 12-digit AWS account ID
-- `DISTRIBUTION_ID` → your CloudFront distribution ID
-
-**`infra/cloudfront-distribution.json`** — replace:
-- `REPLACE_WITH_OAC_ID` → your OAC ID
-- `REPLACE_WITH_ACM_ARN_IN_US_EAST_1` → your ACM certificate ARN
+| Private S3 origin | Block Public Access ON; bucket policy restricts to CloudFront OAC source ARN only |
+| OAC SigV4 signing | Every CloudFront→S3 request is signed; unsigned requests are rejected by S3 |
+| HTTPS enforcement | CloudFront viewer policy: redirect HTTP → HTTPS |
+| TLS minimum version | `TLSv1.2_2021` |
+| Security headers | AWS managed `SecurityHeadersPolicy` — adds HSTS, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` automatically |
+| S3 versioning | Enabled on Phase 2 bucket — retains file history |
+| S3 encryption | SSE-S3 (AES-256) at rest |
+| Secrets management | No secrets in code; AWS credentials via named profile (`sarowar-ostad`); state files gitignored |
+| Certificate | Let's Encrypt (free, automated DNS-01 validation via Route 53) |
 
 ---
 
-## 7. Deployment
+## 14. Testing
 
-### deploy.ps1
+No automated test suite is currently configured.
 
-`deploy.ps1` is the single deploy entrypoint. It:
-1. Runs `npm run build` inside `batch11-site/`
-2. Syncs `dist/` to `s3://batch11-ostaddevops-site` using `aws s3 sync --delete`
-3. Optionally invalidates the CloudFront cache
+**Manual verification checklist:**
 
-**Phase 1 deploy:**
-
-```powershell
-# From project root (Class-02/)
-.\deploy.ps1 -SkipInvalidation
-```
-
-**Phase 2 deploy (after CloudFront is created):**
-
-```powershell
-.\deploy.ps1 -DistributionId "YOUR_DISTRIBUTION_ID"
-```
-
-The `--delete` flag on `aws s3 sync` removes files from S3 that no longer exist in `dist/` — ensures the bucket stays in sync with the build output.
-
-### What deploy.ps1 does NOT do
-
-- Does not run tests (none configured yet)
-- Does not tag releases in git
-- Does not roll back on CloudFront invalidation failure
-
-### Cache behaviour
-
-After deploy, CloudFront serves cached content until an invalidation completes (~30–60 seconds). `deploy.ps1` automatically runs `aws cloudfront create-invalidation --paths "/*"` in Phase 2. You do not need to do this manually.
-
----
-
-## 8. Operational Tasks
-
-### View what's currently in S3
-
-```powershell
-aws s3 ls s3://batch11-ostaddevops-site --recursive --profile sarowar-ostad
-```
-
-### Check CloudFront distribution status
-
-```powershell
-aws cloudfront list-distributions `
-  --query "DistributionList.Items[*].{Id:Id,Domain:DomainName,Status:Status}" `
-  --output table `
-  --profile sarowar-ostad
-```
-
-### Manually invalidate CloudFront cache
-
-```powershell
-aws cloudfront create-invalidation `
-  --distribution-id YOUR_DISTRIBUTION_ID `
-  --paths "/*" `
-  --profile sarowar-ostad
-```
-
-### Check ACM certificate status
-
-```powershell
-aws acm list-certificates `
-  --region us-east-1 `
-  --profile sarowar-ostad `
-  --query "CertificateSummaryList[*].{Domain:DomainName,Status:Status}" `
-  --output table
-```
-
-### Verify bucket is private (Phase 2)
-
-```powershell
-aws s3api get-public-access-block `
-  --bucket batch11-ostaddevops-site `
-  --profile sarowar-ostad
-# All four values must be: true
-```
-
-### Verify bucket policy is in place
-
-```powershell
-aws s3api get-bucket-policy `
-  --bucket batch11-ostaddevops-site `
-  --profile sarowar-ostad
-```
-
-### Roll back to a previous version
-
-S3 versioning is enabled in Phase 2. To restore a previous `index.html`:
-
-```powershell
-# List versions
-aws s3api list-object-versions `
-  --bucket batch11-ostaddevops-site `
-  --prefix index.html `
-  --profile sarowar-ostad
-
-# Restore a specific version
-aws s3api copy-object `
-  --bucket batch11-ostaddevops-site `
-  --copy-source "batch11-ostaddevops-site/index.html?versionId=REPLACE_VERSION_ID" `
-  --key index.html `
-  --profile sarowar-ostad
-
-# Then invalidate CloudFront
-aws cloudfront create-invalidation `
-  --distribution-id YOUR_DISTRIBUTION_ID `
-  --paths "/*" `
-  --profile sarowar-ostad
-```
-
----
-
-## 9. Introducing Changes
-
-### Changing site content (pages, copy, styling)
-
-1. Edit files under `batch11-site/src/`
-2. Test locally: `npm run dev` (hot reload)
-3. Preview production build: `npm run build && npm run preview`
-4. Commit: `git add . && git commit -m "feat: describe your change"`
-5. Deploy:
-   - Phase 1: `.\deploy.ps1 -SkipInvalidation`
-   - Phase 2: `.\deploy.ps1 -DistributionId "YOUR_DISTRIBUTION_ID"`
-
-### Adding a new page
-
-1. Create `batch11-site/src/pages/NewPage.jsx`
-2. Import and add a `<Route>` in [batch11-site/src/App.jsx](batch11-site/src/App.jsx)
-3. Add a `<NavLink>` entry in [batch11-site/src/components/Navbar.jsx](batch11-site/src/components/Navbar.jsx)
-4. Add to the `links` array in [batch11-site/src/components/Footer.jsx](batch11-site/src/components/Footer.jsx)
-5. Test, build, deploy
-
-### Adding a npm dependency
-
-```powershell
-cd batch11-site
-npm install <package-name>   # runtime dependency
-npm install -D <package-name> # dev-only dependency
-```
-
-Commit the updated `package.json` and `package-lock.json`. Do not commit `node_modules/`.
-
-### Changing AWS infrastructure
-
-- **S3 bucket policy changes:** edit `infra/bucket-policy-phase2.json`, re-apply with `aws s3api put-bucket-policy`
-- **CloudFront changes:** use Console or `aws cloudfront update-distribution`. Most changes require a new deployment to take effect (~5 min)
-- **DNS changes:** use Route 53 Console or `aws route53 change-resource-record-sets`. TTL propagation: 1–5 minutes
-
-### Things to never change
-
-| Item | Risk |
-|---|---|
-| Bucket name `batch11-ostaddevops-site` | S3 bucket names are globally unique and permanent. Renaming requires creating a new bucket and re-deploying. |
-| ACM certificate region (`us-east-1`) | Moving it to another region breaks CloudFront. |
-| CloudFront `Z2FDTNDATAQYW2` hosted zone ID | This is an AWS-hardcoded global constant. Do not replace it. |
-
----
-
-## 10. Design Decisions
-
-### Why Vite over Create React App?
-
-Vite v6 is significantly faster for both dev server startup and production builds. CRA is no longer maintained.
-
-### Why Tailwind CSS v4?
-
-Tailwind v4 uses a native CSS `@import "tailwindcss"` directive — no `tailwind.config.js` required. Integrated as a Vite plugin, no PostCSS pipeline needed.
-
-### Why BrowserRouter (client-side routing)?
-
-The site is a Single Page Application. React Router's `<BrowserRouter>` handles routing in the browser. Edge case: on page refresh, the server (S3/CloudFront) must return `index.html` regardless of path — this is configured via:
-- Phase 1: S3 error document set to `index.html`
-- Phase 2: CloudFront custom error responses (403 and 404 → `index.html` with HTTP 200)
-
-### Why OAC instead of OAI?
-
-AWS deprecated Origin Access Identity (OAI). Origin Access Control (OAC) with SigV4 signing is the current recommended approach and is required for S3 buckets outside `us-east-1`.
-
-### Why is the bucket name not the domain name?
-
-Using the domain name as the bucket name (`batch11.ostaddevops.click`) would make the bucket enumerable by anyone who knows the domain. A non-guessable name (`batch11-ostaddevops-site`) reduces the attack surface.
-
-### Why is `deploy.ps1` not a CI/CD pipeline?
-
-This project is scoped to Module 1 of the course — demonstrating manual and semi-automated deployments. CI/CD automation with GitHub Actions is covered in Module 5. The `deploy.ps1` script is structured to be easy to wrap inside a GitHub Actions workflow later.
-
----
-
-## 11. Troubleshooting
-
-| Symptom | Cause | Fix |
+| Check | Phase 1 | Phase 2 |
 |---|---|---|
-| `NoSuchBucket` during deploy | Bucket not created yet | Run Phase 1 or Phase 2 setup steps first |
-| `AccessDenied` during S3 sync | Wrong AWS profile or missing IAM permissions | Check `aws sts get-caller-identity --profile sarowar-ostad` |
-| S3 website URL returns `403 Access Denied` | Public bucket policy not applied | Re-run `aws s3api put-bucket-policy` with `bucket-policy-phase1.json` |
-| CloudFront URL returns `403` | OAC bucket policy not applied, or `ACCOUNT_ID`/`DISTRIBUTION_ID` not replaced | Update `bucket-policy-phase2.json` and re-apply |
-| Page refresh on `/modules` returns error | Custom error responses not configured on CloudFront | Add 403→`/index.html` and 404→`/index.html` custom error responses |
-| `https://` not working | ACM cert not issued, or cert not in `us-east-1` | Check `aws acm list-certificates --region us-east-1` |
-| Old content showing after deploy | CloudFront cache not invalidated | Run `aws cloudfront create-invalidation --paths "/*"` |
-| `npm run build` fails | Missing `node_modules` | Run `npm install` from inside `batch11-site/` |
-| `deploy.ps1` reports `S3 sync failed` | Build step failed or wrong working directory | Run script from project root (`Class-02/`), not from inside `batch11-site/` |
+| Site loads | `http://master-ostaddevops-site.s3-website.ap-south-1.amazonaws.com` | `https://master.ostaddevops.click` |
+| HTTP → HTTPS redirect | N/A | ✅ |
+| Client-side navigation | ✅ navbar links | ✅ navbar links |
+| Page refresh on `/modules` | ✅ returns site (error doc) | ✅ returns 200 (custom error response) |
+| Direct S3 URL | ✅ publicly accessible | ✅ returns 403 |
+| Security headers | N/A | DevTools → Network → Response Headers |
+| TLS certificate | N/A | Browser padlock → valid for `master.ostaddevops.click` |
 
 ---
 
-## 12. Key Reference Values
+## 15. Troubleshooting
+
+| Symptom | Likely Cause | Fix |
+|---|---|---|
+| `AccessDenied` during S3 sync | Wrong AWS profile or missing IAM permissions | `aws sts get-caller-identity --profile sarowar-ostad` |
+| `BucketNotEmpty` on delete | Versioning enabled — versions remain after `s3 rm` | `setup-phase2.ps1 -Teardown` handles this via `list-object-versions` + `delete-objects` |
+| S3 website URL returns `403` | Public bucket policy not applied | Re-run `setup-phase1.ps1` — step 4 re-applies the policy |
+| CloudFront URL returns `403` | OAC bucket policy missing or has wrong ARN | Re-run `setup-phase2.ps1` — step 4 re-applies the policy with correct values |
+| Page refresh returns error | Custom error responses not configured | Phase 2 script sets these at distribution creation time |
+| `https://` not working | ACM cert not in `us-east-1` | Cert must be in `us-east-1` — run `certbot-import.sh` with `-r us-east-1` |
+| Old content after deploy | CloudFront cache not invalidated | Phase 2 script always invalidates; Phase 1 has no CloudFront |
+| `npm run build` fails | Missing `node_modules` | Both setup scripts auto-run `npm install` when `node_modules` is absent |
+| `S3 sync failed` | Wrong working directory | Run setup scripts from project root, not from inside `master-site/` |
+| AWS CLI error (exit 252) | Function named `$Args` / `param([string[]]$Args)` conflict | Fixed — scripts use `$AwsArgs` / no-param-block pattern |
+| CloudFront still showing old cert | ACM import preserved same ARN | No action needed — `certbot-import.sh` re-imports with `--certificate-arn` |
+
+---
+
+## 16. Key Reference Values
 
 | Name | Value |
 |---|---|
-| S3 bucket | `batch11-ostaddevops-site` |
-| S3 region | `ap-south-1` |
-| S3 website endpoint | `http://batch11-ostaddevops-site.s3-website.ap-south-1.amazonaws.com` |
-| ACM certificate region | `us-east-1` (required for CloudFront) |
-| Custom domain | `batch11.ostaddevops.click` |
-| Hosted zone apex | `ostaddevops.click` |
-| CloudFront Route 53 hosted zone ID | `Z2FDTNDATAQYW2` (AWS global constant) |
-| AWS CLI profile | `sarowar-ostad` |
-| Course platform | https://ostad.app/ |
-| Instructor | MD Sarowar Alam — Lead DevOps Engineer, WPPProduction |
+| Phase 1 bucket | `master-ostaddevops-site` (ap-south-1) |
+| Phase 2 bucket | `master-ostaddevops-site-private` (ap-south-1) |
+| Domain | `master.ostaddevops.click` |
+| Hosted zone | `ostaddevops.click` / `Z1019653XLWIJ02C53P5` |
+| AWS account ID | `388779989543` |
+| AWS profile | `sarowar-ostad` |
+| ACM cert ARN | `arn:aws:acm:us-east-1:388779989543:certificate/392fe338-b0b8-4aeb-ac2c-c930b219bb13` |
+| CloudFront alias zone | `Z2FDTNDATAQYW2` (fixed AWS constant for all CloudFront distributions) |
+| CachingOptimized policy | `658327ea-f89d-4fab-a63d-7e88639e58f6` |
+| SecurityHeadersPolicy | `67f7725c-6f97-4210-82d7-5512b31e9d03` |
 
 ---
 
-## 🧑‍💻 Author
+## 17. Future Improvements
 
-*Md. Sarowar Alam*  
-Lead DevOps Engineer, Hogarth Worldwide  
-📧 Email: sarowar@hotmail.com  
+| Area | Suggestion |
+|---|---|
+| CI/CD | GitHub Actions workflow: push to `main` → build → S3 sync → CloudFront invalidation |
+| Certificate renewal | AWS Lambda + EventBridge scheduled rule to auto-renew via `certbot-import.sh` before 30-day expiry |
+| Monitoring | CloudWatch alarm on `5xxErrorRate` for the CloudFront distribution |
+| WAF | Attach AWS WAF to CloudFront distribution (rate limiting, geo-blocking) |
+| Multi-environment | Separate `dev` / `staging` / `prod` buckets + distributions with environment-scoped state files |
+| S3 access logging | Enable S3 server access logging to a separate bucket for audit trail |
+| CloudFront logging | Enable CloudFront standard logs to S3 for traffic analysis |
+| IaC | Migrate `infra/` templates to Terraform or AWS CDK for full state management |
+| Testing | Add Playwright or Cypress E2E tests; run in CI before deploy |
+
+---
+
+## 18. Operational Notes
+
+### Changing site content
+
+```powershell
+# 1. Edit files under master-site/src/
+# 2. Test locally
+cd master-site && npm run dev
+
+# 3. Deploy
+cd ..
+.\setup-phase1.ps1      # Phase 1
+.\setup-phase2.ps1      # Phase 2 (build + sync + invalidation only on re-run)
+```
+
+### Adding a new page
+
+1. Create `master-site/src/pages/NewPage.jsx`
+2. Add `<Route path="/new" element={<NewPage />} />` in `App.jsx`
+3. Add `<NavLink>` in `Navbar.jsx`
+4. Add link in `Footer.jsx`
+5. Deploy
+
+### Checking what is in S3
+
+```powershell
+# Phase 1 bucket
+aws s3 ls s3://master-ostaddevops-site --recursive --profile sarowar-ostad
+
+# Phase 2 bucket
+aws s3 ls s3://master-ostaddevops-site-private --recursive --profile sarowar-ostad
+```
+
+### Forcing a full CloudFront cache flush
+
+```powershell
+aws cloudfront create-invalidation `
+  --distribution-id YOUR_DIST_ID `
+  --paths "/*" `
+  --profile sarowar-ostad
+```
+
+---
+
+## 19. License
+
+License information not currently defined.
+
+---
+
+## 20. Project Lead
+
+**MD Sarowar Alam**  
+Lead DevOps Engineer, WPP Production  
+📧 Email: [sarowar@hotmail.com](mailto:sarowar@hotmail.com)  
 🔗 LinkedIn: https://www.linkedin.com/in/sarowar/
+
+*Part of the Mastering DevOps course — Module 3: AWS Static Site Hosting*
