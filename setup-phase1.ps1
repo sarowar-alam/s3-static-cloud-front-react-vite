@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Phase 1 — Public S3 Static Site: setup or teardown.
+  Phase 1  -  Public S3 Static Site: setup or teardown.
 
 .DESCRIPTION
   Setup  (default): Creates the S3 bucket, enables static website hosting,
@@ -42,14 +42,16 @@ function Write-Fail  { param($msg)     Write-Host "    [FAIL] $msg" -ForegroundC
 
 function Invoke-Aws {
     # $args is the automatic variable; no param block so every argument lands in it
+    $ErrorActionPreference = "Continue"
     $result = & aws @args --profile $AwsProfile 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "AWS CLI error (exit $LASTEXITCODE):`n$result"
+        $msg = $result | Out-String
+        throw "AWS CLI error (exit $LASTEXITCODE):`n$msg"
     }
     return $result
 }
 
-# ── State helpers — track what *this script* created ─────────────────────────
+# ── State helpers  -  track what *this script* created ─────────────────────────
 function Load-State {
     if (Test-Path $StateFile) {
         return Get-Content $StateFile -Raw | ConvertFrom-Json
@@ -67,7 +69,7 @@ function Save-State {
 # ─────────────────────────────────────────────────────────────────────────────
 function Invoke-Setup {
     Write-Host "`n======================================" -ForegroundColor Cyan
-    Write-Host "  Phase 1 — Public S3 Setup" -ForegroundColor Cyan
+    Write-Host "  Phase 1  -  Public S3 Setup" -ForegroundColor Cyan
     Write-Host "  Bucket : $BucketName" -ForegroundColor Cyan
     Write-Host "  Region : $Region" -ForegroundColor Cyan
     Write-Host "======================================" -ForegroundColor Cyan
@@ -77,9 +79,10 @@ function Invoke-Setup {
     # ── Step 1: Create bucket ─────────────────────────────────────────────────
     Write-Step "1/5" "Create S3 bucket..."
 
-    $exists = & aws s3api head-bucket --bucket $BucketName --profile $AwsProfile 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Skipped "Bucket '$BucketName' already exists — skipping creation."
+    $bucketExists = $false
+    try { & aws s3api head-bucket --bucket $BucketName --profile $AwsProfile 2>&1 | Out-Null; $bucketExists = ($LASTEXITCODE -eq 0) } catch { $bucketExists = $false }
+    if ($bucketExists) {
+        Write-Skipped "Bucket '$BucketName' already exists - skipping creation."
         $state.BucketCreatedByUs = $false
         Save-State $state
     } else {
@@ -122,7 +125,7 @@ function Invoke-Setup {
     Set-Location $SiteDir
     try {
         if (-not (Test-Path "node_modules")) {
-            Write-Host "    node_modules not found — running npm install..." -ForegroundColor Yellow
+            Write-Host "    node_modules not found  -  running npm install..." -ForegroundColor Yellow
             npm install
             if ($LASTEXITCODE -ne 0) { throw "npm install failed." }
         }
@@ -154,7 +157,7 @@ function Invoke-Setup {
 # ─────────────────────────────────────────────────────────────────────────────
 function Invoke-Teardown {
     Write-Host "`n======================================" -ForegroundColor Yellow
-    Write-Host "  Phase 1 — Teardown" -ForegroundColor Yellow
+    Write-Host "  Phase 1  -  Teardown" -ForegroundColor Yellow
     Write-Host "  Bucket : $BucketName" -ForegroundColor Yellow
     Write-Host "  Region : $Region" -ForegroundColor Yellow
     Write-Host "======================================" -ForegroundColor Yellow
@@ -182,9 +185,10 @@ function Invoke-Teardown {
     }
 
     # ── Check bucket exists ───────────────────────────────────────────────────
-    $exists = & aws s3api head-bucket --bucket $BucketName --profile $AwsProfile 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Skipped "Bucket '$BucketName' does not exist — nothing to tear down."
+    $bucketExists = $false
+    try { & aws s3api head-bucket --bucket $BucketName --profile $AwsProfile 2>&1 | Out-Null; $bucketExists = ($LASTEXITCODE -eq 0) } catch { $bucketExists = $false }
+    if (-not $bucketExists) {
+        Write-Skipped "Bucket '$BucketName' does not exist - nothing to tear down."
         if (Test-Path $StateFile) { Remove-Item $StateFile -Force }
         exit 0
     }

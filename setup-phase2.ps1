@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Phase 2 — Private S3 + CloudFront + HTTPS + Custom Domain.
+  Phase 2  -  Private S3 + CloudFront + HTTPS + Custom Domain.
 
 .DESCRIPTION
   Fully independent of Phase 1. Uses existing ACM certificate and Route 53 hosted zone.
@@ -29,7 +29,7 @@ $AwsProfile     = "sarowar-ostad"
 $AccountId      = "388779989543"
 $Domain         = "master.ostaddevops.click"
 $HostedZoneId   = "Z1019653XLWIJ02C53P5"
-$CfAliasZone    = "Z2FDTNDATAQYW2"   # Fixed AWS constant — same for every CloudFront distribution
+$CfAliasZone    = "Z2FDTNDATAQYW2"   # Fixed AWS constant  -  same for every CloudFront distribution
 $AcmCertArn     = "arn:aws:acm:us-east-1:388779989543:certificate/392fe338-b0b8-4aeb-ac2c-c930b219bb13"
 $OacName        = "master-oac"
 $CfTemplate     = Join-Path $PSScriptRoot "infra\cloudfront-distribution.json"
@@ -44,11 +44,13 @@ function Write-Skipped { param($msg)     Write-Host "    [SKIP] $msg" -Foregroun
 function Write-Info    { param($msg)     Write-Host "    $msg" -ForegroundColor DarkGray }
 
 # ── AWS CLI wrapper ───────────────────────────────────────────────────────────
-# No param block — $args automatic variable collects all space-separated arguments
+# No param block  -  $args automatic variable collects all space-separated arguments
 function Invoke-Aws {
+    $ErrorActionPreference = "Continue"
     $result = & aws @args --profile $AwsProfile 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "AWS CLI error (exit $LASTEXITCODE):`n$result"
+        $msg = $result | Out-String
+        throw "AWS CLI error (exit $LASTEXITCODE):`n$msg"
     }
     return $result
 }
@@ -57,7 +59,7 @@ function Invoke-Aws {
 function New-TempJson {
     param([string]$Content)
     $path = Join-Path $env:TEMP "phase2-$(New-Guid).json"
-    $Content | Set-Content $path -Encoding UTF8
+    [System.IO.File]::WriteAllText($path, $Content, [System.Text.UTF8Encoding]::new($false))
     return $path
 }
 
@@ -90,7 +92,7 @@ function Invoke-BuildAndSync {
     Set-Location $SiteDir
     try {
         if (-not (Test-Path "node_modules")) {
-            Write-Info "node_modules not found — running npm install..."
+            Write-Info "node_modules not found  -  running npm install..."
             npm install
             if ($LASTEXITCODE -ne 0) { throw "npm install failed." }
         }
@@ -118,7 +120,7 @@ function Invoke-BuildAndSync {
 # =============================================================================
 function Invoke-Setup {
     Write-Host "`n=============================================" -ForegroundColor Cyan
-    Write-Host "  Phase 2 — Private S3 + CloudFront Setup"    -ForegroundColor Cyan
+    Write-Host "  Phase 2  -  Private S3 + CloudFront Setup"    -ForegroundColor Cyan
     Write-Host "  Bucket : $BucketName"                       -ForegroundColor Cyan
     Write-Host "  Domain : $Domain"                           -ForegroundColor Cyan
     Write-Host "  Region : $Region"                           -ForegroundColor Cyan
@@ -129,8 +131,9 @@ function Invoke-Setup {
     # ── Step 1: S3 bucket ─────────────────────────────────────────────────────
     Write-Step "1/7" "Create private S3 bucket..."
 
-    & aws s3api head-bucket --bucket $BucketName --profile $AwsProfile 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
+    $bucketExists = $false
+    try { & aws s3api head-bucket --bucket $BucketName --profile $AwsProfile 2>&1 | Out-Null; $bucketExists = ($LASTEXITCODE -eq 0) } catch { $bucketExists = $false }
+    if ($bucketExists) {
         Write-Skipped "Bucket '$BucketName' already exists."
         $state.BucketCreatedByUs = $false
     } else {
@@ -143,7 +146,7 @@ function Invoke-Setup {
     }
     Save-State $state
 
-    # Harden bucket (idempotent — safe on every run)
+    # Harden bucket (idempotent  -  safe on every run)
     Invoke-Aws s3api put-public-access-block `
         --bucket $BucketName `
         --public-access-block-configuration "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true" | Out-Null
@@ -188,7 +191,7 @@ function Invoke-Setup {
     if ($state.DistributionId) {
         Write-Skipped "Distribution already in state: $($state.DistributionId)"
     } else {
-        # Patch template in-memory — infra/cloudfront-distribution.json is never modified on disk
+        # Patch template in-memory  -  infra/cloudfront-distribution.json is never modified on disk
         $cfConfig = Get-Content $CfTemplate -Raw | ConvertFrom-Json
         $cfConfig.CallerReference                         = "master-site-$(Get-Date -Format 'yyyyMMddHHmmss')"
         $cfConfig.Origins.Items[0].OriginAccessControlId = $state.OacId
@@ -261,7 +264,7 @@ function Invoke-Setup {
 # =============================================================================
 function Invoke-Teardown {
     Write-Host "`n=============================================" -ForegroundColor Yellow
-    Write-Host "  Phase 2 — Teardown"                           -ForegroundColor Yellow
+    Write-Host "  Phase 2  -  Teardown"                           -ForegroundColor Yellow
     Write-Host "  Domain : $Domain"                             -ForegroundColor Yellow
     Write-Host "  Bucket : $BucketName"                         -ForegroundColor Yellow
     Write-Host "=============================================" -ForegroundColor Yellow
@@ -275,7 +278,7 @@ function Invoke-Teardown {
     if ($state.BucketCreatedByUs) {
         Write-Host "    - S3 bucket + all objects: $BucketName" -ForegroundColor White
     } else {
-        Write-Host "    - S3 bucket policy only  : $BucketName (bucket preserved — it pre-existed)" -ForegroundColor DarkYellow
+        Write-Host "    - S3 bucket policy only  : $BucketName (bucket preserved  -  it pre-existed)" -ForegroundColor DarkYellow
     }
     Write-Host ""
     $confirm = Read-Host "  Continue? (y/N)"
@@ -298,7 +301,7 @@ function Invoke-Teardown {
         Save-State $state
         Write-Ok "Route 53 record deleted."
     } else {
-        Write-Skipped "Not in state — skipping."
+        Write-Skipped "Not in state  -  skipping."
     }
 
     # ── 2. Disable + delete CloudFront distribution ───────────────────────────
@@ -335,7 +338,7 @@ function Invoke-Teardown {
         $state.DistributionDomain = $null
         Save-State $state
     } else {
-        Write-Skipped "No distribution in state — skipping."
+        Write-Skipped "No distribution in state  -  skipping."
     }
 
     # ── 3. Delete OAC ────────────────────────────────────────────────────────
@@ -353,16 +356,17 @@ function Invoke-Teardown {
         $state.OacCreatedByUs = $false
         Save-State $state
     } else {
-        Write-Skipped "OAC not created by this script — skipping."
+        Write-Skipped "OAC not created by this script  -  skipping."
     }
 
     # ── 4. S3 bucket ─────────────────────────────────────────────────────────
     Write-Step "4/5" "Clean up S3..."
-    & aws s3api head-bucket --bucket $BucketName --profile $AwsProfile 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Skipped "Bucket '$BucketName' not found — skipping."
+    $bucketExists = $false
+    try { & aws s3api head-bucket --bucket $BucketName --profile $AwsProfile 2>&1 | Out-Null; $bucketExists = ($LASTEXITCODE -eq 0) } catch { $bucketExists = $false }
+    if (-not $bucketExists) {
+        Write-Skipped "Bucket '$BucketName' not found - skipping."
     } elseif ($state.BucketCreatedByUs) {
-        # Versioning is enabled — must delete all versions + delete markers before bucket can be deleted
+        # Versioning is enabled  -  must delete all versions + delete markers before bucket can be deleted
         Write-Info "Deleting all object versions and delete markers..."
         $hasMore = $true
         while ($hasMore) {
@@ -399,7 +403,7 @@ function Invoke-Teardown {
                     --delete "file://$delTemp" | Out-Null
             } finally { Remove-Item $delTemp -Force -ErrorAction SilentlyContinue }
 
-            # If IsTruncated was true there are more pages — loop again
+            # If IsTruncated was true there are more pages  -  loop again
             $hasMore = ($versionsObj.PSObject.Properties.Name -contains 'IsTruncated') -and ($versionsObj.IsTruncated -eq $true)
         }
         Write-Info "All versions deleted. Deleting bucket..."
@@ -407,7 +411,7 @@ function Invoke-Teardown {
         Write-Ok "Bucket emptied and deleted."
     } else {
         & aws s3api delete-bucket-policy --bucket $BucketName --profile $AwsProfile 2>&1 | Out-Null
-        Write-Ok "Bucket policy removed (bucket preserved — it pre-existed)."
+        Write-Ok "Bucket policy removed (bucket preserved  -  it pre-existed)."
     }
     $state.BucketCreatedByUs = $false
     Save-State $state
@@ -429,9 +433,9 @@ if ($Teardown) {
 } else {
     $existingState = Load-State
     if ($existingState.DistributionId) {
-        # Infrastructure already exists — re-deploy only
+        # Infrastructure already exists  -  re-deploy only
         Write-Host "`n=============================================" -ForegroundColor Cyan
-        Write-Host "  Phase 2 — Re-deploy"                          -ForegroundColor Cyan
+        Write-Host "  Phase 2  -  Re-deploy"                          -ForegroundColor Cyan
         Write-Host "  Bucket : $BucketName"                         -ForegroundColor Cyan
         Write-Host "  Dist   : $($existingState.DistributionId)"    -ForegroundColor Cyan
         Write-Host "=============================================" -ForegroundColor Cyan
